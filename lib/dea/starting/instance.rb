@@ -401,11 +401,19 @@ module Dea
       end
     end
 
+    def workspace_dir
+      instance_dir = File.join(config["base_dir"], "running")
+      FileUtils.mkdir_p(instance_dir)
+      Dir.mktmpdir(nil, instance_dir).tap do |dir|
+        File.chmod(0755, dir)
+      end
+
+      instance_dir
+    end
+
     def promise_extract_droplet
       Promise.new do |p|
-        script = "cd /home/vcap/ && tar zxf #{droplet.droplet_path}"
-
-        container.run_script(:app, script)
+        `cd #{workspace_dir} && tar zxf #{droplet.droplet_path}`
 
         p.deliver
       end
@@ -415,28 +423,23 @@ module Dea
       Promise.new do |p|
         env = Env.new(StartMessage.new(@raw_attributes), self)
 
-        if staged_info
-          command = start_command || staged_info['start_command']
+        command = start_command
 
-          unless command
-            p.fail(MissingStartCommand.new)
-            next
-          end
-
-          start_script =
-            Dea::StartupScriptGenerator.new(
-              command,
-              env.exported_user_environment_variables,
-              env.exported_system_environment_variables
-            ).generate
-        else
-          start_script = env.exported_environment_variables + "./startup;\nexit"
+        unless command
+          p.fail(MissingStartCommand.new)
+          next
         end
 
-        response = container.spawn(start_script,
-                                   container.resource_limits(self.file_descriptor_limit, NPROC_LIMIT))
+        start_script =
+            Dea::StartupScriptGenerator.new(
+                command,
+                env.exported_user_environment_variables,
+                env.exported_system_environment_variables
+            ).generate
 
-        attributes['warden_job_id'] = response.job_id
+        FileUtils.chdir(workspace_dir) do
+          system "/bin/bash -c '#{start_script}'"
+        end
 
         p.deliver
       end
@@ -468,14 +471,10 @@ module Dea
         promise_state(State::BORN, State::STARTING).resolve
 
         # Concurrently download droplet and setup container
-        [
-          promise_droplet,
-          promise_container
-        ].each(&:run).each(&:resolve)
+        promise_droplet.resolve
 
         [
           promise_extract_droplet,
-          promise_exec_hook_script('before_start'),
           promise_start
         ].each(&:resolve)
 
@@ -485,16 +484,9 @@ module Dea
 
         # Fire off link so that the health check can be cancelled when the
         # instance crashes before the health check completes.
-        link
 
-        if promise_health_check.resolve
-          promise_state(State::STARTING, State::RUNNING).resolve
-          logger.info('droplet.healthy')
-          promise_exec_hook_script('after_start').resolve
-        else
-          logger.warn('droplet.unhealthy')
-          p.fail(HealthCheckFailed.new)
-        end
+        promise_state(State::STARTING, State::RUNNING).resolve
+        logger.info('droplet.healthy')
 
         p.deliver
       end
@@ -507,25 +499,6 @@ module Dea
         end
 
         callback.call(error) unless callback.nil?
-      end
-    end
-
-    def promise_container
-      Promise.new do |p|
-        bind_mounts = [{'src_path' => droplet.droplet_dirname, 'dst_path' => droplet.droplet_dirname}]
-        with_network = true
-        container.create_container(
-          bind_mounts: bind_mounts + config['bind_mounts'],
-          limit_cpu: config['instance']['cpu_limit_shares'],
-          byte: disk_limit_in_bytes,
-          inode: config.instance_disk_inode_limit,
-          limit_memory: memory_limit_in_bytes,
-          setup_network: with_network)
-
-        attributes['warden_handle'] = container.handle
-
-        promise_setup_environment.resolve
-        p.deliver
       end
     end
 
@@ -562,13 +535,12 @@ module Dea
       p = Promise.new do
         logger.info 'droplet.stopping'
 
-        promise_exec_hook_script('before_stop').resolve
-
         promise_state([State::RUNNING, State::STARTING, State::EVACUATING], State::STOPPING).resolve
 
-        promise_exec_hook_script('after_stop').resolve
+        #stop all containers until we can track ID
+        system("docker ps -a | awk '{print $1}' | xargs docker rm")
 
-        promise_stop.resolve
+        FileUtils.rm_rf(workspace_dir)
 
         promise_state(State::STOPPING, State::STOPPED).resolve
 
@@ -577,18 +549,6 @@ module Dea
 
       resolve_and_log(p, 'instance.stop') do |error, _|
         callback.call(error) unless callback.nil?
-      end
-    end
-
-    def promise_copy_out
-      Promise.new do |p|
-        new_instance_path = File.join(config.crashes_path, instance_id)
-        new_instance_path = File.expand_path(new_instance_path)
-        copy_out_request('/home/vcap/logs/', new_instance_path + '/logs')
-
-        attributes['instance_path'] = new_instance_path
-
-        p.deliver
       end
     end
 
@@ -611,12 +571,7 @@ module Dea
 
     def promise_crash_handler
       Promise.new do |p|
-        if container.handle
-          promise_copy_out.resolve
-          promise_destroy.resolve
-
-          container.close_all_connections
-        end
+        FileUtils.rm_rf(workspace_dir)
 
         p.deliver
       end
@@ -798,19 +753,6 @@ module Dea
 
     def stat_collector
       @stat_collector ||= StatCollector.new(container)
-    end
-
-    def staged_info
-      @staged_info ||= begin
-        Dir.mktmpdir do |destination_dir|
-          staging_file_name = 'staging_info.yml'
-          copied_file_name = "#{destination_dir}/#{staging_file_name}"
-
-          copy_out_request("/home/vcap/#{staging_file_name}", destination_dir)
-
-          YAML.load_file(copied_file_name) if File.exists?(copied_file_name)
-        end
-      end
     end
 
     def snapshot_attributes
