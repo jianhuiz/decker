@@ -95,6 +95,10 @@ module Dea
       @dir_server.staging_task_file_url_for(task_id, workspace.warden_staging_log)
     end
 
+    def task_info
+      File.exists?(workspace.staging_info_path) ? YAML.load_file(workspace.staging_info_path) : {}
+    end
+
     def detected_buildpack
       "Docker"
     end
@@ -165,7 +169,25 @@ module Dea
 
     def promise_prepare_staging_log
       Promise.new do |p|
-        `mkdir -p #{workspace.warden_staged_dir}/logs && touch #{workspace.warden_staging_log}`
+        script = "mkdir -p #{workspace.warden_staged_dir}/logs && touch #{workspace.warden_staging_log}"
+
+        logger.info 'staging.task.preparing-log', script: script
+
+        loggregator_emit_result `#{script}`
+
+        p.deliver
+      end
+    end
+
+    def promise_app_dir
+      Promise.new do |p|
+        # Some buildpacks seem to make assumption that /app is a non-empty directory
+        # See: https://github.com/heroku/heroku-buildpack-python/blob/master/bin/compile#L46
+        script = "mkdir -p #{workspace.warden_staged_dir}/app"
+
+        logger.info 'staging.task.making-app-dir', script: script
+
+        loggregator_emit_result `#{script}`
 
         p.deliver
       end
@@ -175,8 +197,9 @@ module Dea
       Promise.new do |p|
         logger.info 'staging.task.unpacking-app', destination: workspace.warden_unstaged_dir
 
-        log_to_staging_log("-----> Downloaded app package ($package_size)")
-        `mkdir -p #{workspace.warden_unstaged_dir} && unzip -q #{workspace.downloaded_app_package_path} -d #{workspace.warden_unstaged_dir}`
+        script = "mkdir -p #{workspace.warden_unstaged_dir} && unzip -q #{workspace.downloaded_app_package_path} -d #{workspace.warden_unstaged_dir}"
+        logger.info 'staging.task.unpack-app', script: script
+        loggregator_emit_result `#{script}`
 
         p.deliver
       end
@@ -186,7 +209,8 @@ module Dea
       Promise.new do |p|
         logger.info 'staging.task.packing-droplet'
 
-        `mkdir -p #{File.dirname(workspace.staged_droplet_path)} && cd #{workspace.warden_unstaged_dir} && COPYFILE_DISABLE=true tar -czf #{workspace.staged_droplet_path} .`
+        script = "mkdir -p #{File.dirname(workspace.staged_droplet_path)} && cd #{workspace.warden_unstaged_dir} && COPYFILE_DISABLE=true tar -czf #{workspace.staged_droplet_path} ."
+        logger.info 'staging.task.pack-app', script: script
         p.deliver
       end
     end

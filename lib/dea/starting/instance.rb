@@ -401,19 +401,19 @@ module Dea
       end
     end
 
-    def workspace_dir
-      instance_dir = File.join(config["base_dir"], "running")
+    def instance_dir
+      instance_dir = File.join(config["base_dir"], "running", instance_id)
+
       FileUtils.mkdir_p(instance_dir)
-      Dir.mktmpdir(nil, instance_dir).tap do |dir|
-        File.chmod(0755, dir)
-      end
 
       instance_dir
     end
 
     def promise_extract_droplet
       Promise.new do |p|
-        `cd #{workspace_dir} && tar zxf #{droplet.droplet_path}`
+        extract_droplet_command = "cd #{instance_dir} && tar zxf #{droplet.droplet_path}"
+        logger.info "docker.extract #{extract_droplet_command}"
+        system(extract_droplet_command)
 
         p.deliver
       end
@@ -423,21 +423,24 @@ module Dea
       Promise.new do |p|
         env = Env.new(StartMessage.new(@raw_attributes), self)
 
-        command = start_command
+        docker_start_command = [
+          "mkdir {app,logs}", # StartupScriptGenerator expects logs, and app directories. provided by buildpack?
+          "cp Dockerfile app",
+          "docker build -t #{instance_id} .",
+          "docker run   -d #{instance_id}"
+        ].join(';')
 
-        unless command
-          p.fail(MissingStartCommand.new)
-          next
-        end
+        logger.info "docker.start #{docker_start_command}"
 
         start_script =
             Dea::StartupScriptGenerator.new(
-                command,
+                docker_start_command,
                 env.exported_user_environment_variables,
                 env.exported_system_environment_variables
             ).generate
+        logger.info "docker.script #{start_script}"
 
-        FileUtils.chdir(workspace_dir) do
+        FileUtils.chdir(instance_dir) do
           system "/bin/bash -c '#{start_script}'"
         end
 
@@ -537,10 +540,11 @@ module Dea
 
         promise_state([State::RUNNING, State::STARTING, State::EVACUATING], State::STOPPING).resolve
 
-        #stop all containers until we can track ID
-        system("docker ps -a | awk '{print $1}' | xargs docker rm")
+        stop_command = "docker stop #{instance_id} && docker rm #{instance_id}"
+        logger.info "docker.stop #{stop_command}"
+        system(stop_command)
 
-        FileUtils.rm_rf(workspace_dir)
+        FileUtils.rm_rf(instance_dir)
 
         promise_state(State::STOPPING, State::STOPPED).resolve
 
@@ -571,7 +575,8 @@ module Dea
 
     def promise_crash_handler
       Promise.new do |p|
-        FileUtils.rm_rf(workspace_dir)
+        logger.info "docker.crash_handler 'FileUtils.rm_rf(#{instance_dir})'"
+        FileUtils.rm_rf(instance_dir)
 
         p.deliver
       end
