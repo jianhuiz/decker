@@ -173,7 +173,7 @@ module Dea
 
         logger.info 'staging.task.preparing-log', script: script
 
-        loggregator_emit_result `#{script}`
+        `#{script}`
 
         p.deliver
       end
@@ -187,7 +187,7 @@ module Dea
 
         logger.info 'staging.task.making-app-dir', script: script
 
-        loggregator_emit_result `#{script}`
+        `#{script}`
 
         p.deliver
       end
@@ -199,7 +199,7 @@ module Dea
 
         script = "mkdir -p #{workspace.warden_unstaged_dir} && unzip -q #{workspace.downloaded_app_package_path} -d #{workspace.warden_unstaged_dir}"
         logger.info 'staging.task.unpack-app', script: script
-        loggregator_emit_result `#{script}`
+        `#{script}`
 
         p.deliver
       end
@@ -211,6 +211,7 @@ module Dea
 
         script = "mkdir -p #{File.dirname(workspace.staged_droplet_path)} && cd #{workspace.warden_unstaged_dir} && COPYFILE_DISABLE=true tar -czf #{workspace.staged_droplet_path} ."
         logger.info 'staging.task.pack-app', script: script
+        `#{script}`
         p.deliver
       end
     end
