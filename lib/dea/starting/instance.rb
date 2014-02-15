@@ -427,7 +427,7 @@ module Dea
           "mkdir {app,logs}", # StartupScriptGenerator expects logs, and app directories. provided by buildpack?
           "cp Dockerfile app",
           "docker build -t #{instance_id} .",
-          "docker run   -d #{instance_id}"
+          "docker run -d --name #{private_instance_id} #{instance_id}"
         ].join(';')
 
         logger.info "docker.start #{docker_start_command}"
@@ -540,7 +540,7 @@ module Dea
 
         promise_state([State::RUNNING, State::STARTING, State::EVACUATING], State::STOPPING).resolve
 
-        stop_command = "docker stop #{instance_id} && docker rm #{instance_id}"
+        stop_command = "docker stop #{private_instance_id} && docker rm #{private_instance_id}"
         logger.info "docker.stop #{stop_command}"
         system(stop_command)
 
