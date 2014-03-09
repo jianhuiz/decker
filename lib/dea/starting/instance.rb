@@ -427,7 +427,7 @@ module Dea
           "mkdir {app,logs}", # StartupScriptGenerator expects logs, and app directories. provided by buildpack?
           "cp Dockerfile app",
           "docker build -t #{instance_id} .",
-          "docker run -d --name #{private_instance_id} #{instance_id}"
+          "docker run -d -p 13543:80 --name #{private_instance_id} #{instance_id}"
         ].join(';')
 
         logger.info "docker.start #{docker_start_command}"
@@ -506,11 +506,13 @@ module Dea
     end
 
     def instance_host_port
-      container.network_ports['host_port']
+      #container.network_ports['host_port']
+      13543
     end
 
     def instance_container_port
-      container.network_ports['container_port']
+      #container.network_ports['container_port']
+      80
     end
 
     def promise_droplet
