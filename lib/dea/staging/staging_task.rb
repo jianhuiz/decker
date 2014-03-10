@@ -205,6 +205,17 @@ module Dea
       end
     end
 
+    def promise_clean_unstaged_dir
+      Promise.new do |p|
+        logger.info 'staging.task.cleaning-unstaged-droplet'
+
+        script = "[ -d #{workspace.warden_unstaged_dir} ] && rm -rf #{workspace.warden_unstaged_dir}/*"
+        logger.info 'staging.task.cleaning-unstaged-dir', script: script
+        `#{script}`
+        p.deliver
+      end
+    end
+
     def promise_pack_app
       Promise.new do |p|
         logger.info 'staging.task.packing-droplet'
@@ -356,6 +367,7 @@ module Dea
 
     def resolve_staging
       Promise.run_serially(
+        promise_clean_unstaged_dir,
         promise_unpack_app,
         promise_pack_app,
         promise_save_droplet,
