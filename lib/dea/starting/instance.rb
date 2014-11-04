@@ -426,7 +426,9 @@ module Dea
         docker_start_command = [
           "mkdir {app,logs}", # StartupScriptGenerator expects logs, and app directories. provided by buildpack?
           "cp Dockerfile app",
+          "sed -i \"1 i nameserver 8.8.8.8\" /etc/resolv.conf", # docker registry always uses the first dns server
           "docker build -t #{instance_id} .",
+          "sed -i \"/^nameserver 8.8.8.8/d\" /etc/resolv.conf", # remove added dns after docker pull and build
           "docker run -d -p 13543:80 --name #{private_instance_id} #{instance_id}"
         ].join(';')
 
